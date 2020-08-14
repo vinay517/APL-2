@@ -1,0 +1,215 @@
+#lang eopl
+
+;;Vinay Mohan Behara U00851261 and Swapnika Pasunuri U00843540
+
+;;;;;;;;;;;;;;;; top level and tests ;;;;;;;;;;;;;;;;
+
+(define run
+  (lambda (string)
+    (eval-program (scan&parse string))))
+
+;; needed for testing
+(define equal-external-reps? equal?)
+
+;;;;;;;;;;;;;;;; grammatical specification ;;;;;;;;;;;;;;;;
+
+(define the-lexical-spec
+  '((whitespace (whitespace) skip)
+    (comment ("%" (arbno (not #\newline))) skip)
+    (identifier
+      (letter (arbno (or letter digit "_" "-" "?")))
+      symbol)
+    (integer (digit (arbno digit)) number)))
+
+(define the-grammar
+  '((program (expression) a-program)
+    (expression (integer) lit-exp)
+    (expression (identifier) var-exp)   
+    (expression
+      (primitive "(" (separated-list expression ",") ")")
+      primapp-exp)
+    (expression
+      ("if" expression "then" expression "else" expression)
+      if-exp)
+    (expression
+      ("let" (arbno  identifier "=" expression) "in" expression)
+      let-exp)
+    (expression
+      ("proc" "(" (separated-list identifier ",") ")" expression)
+      proc-exp)
+    (expression
+      ("(" expression (arbno expression) ")")
+      app-exp)
+
+    (primitive ("+")     add-prim)
+    (primitive ("-")     subtract-prim)
+    (primitive ("*")     mult-prim)
+    (primitive ("add1")  incr-prim)
+    (primitive ("sub1")  decr-prim)
+    (primitive ("zero?") zero-test-prim)
+    
+    ))
+
+(sllgen:make-define-datatypes the-lexical-spec the-grammar)
+
+(define show-the-datatypes
+  (lambda () (sllgen:list-define-datatypes the-lexical-spec the-grammar)))
+
+(define scan&parse
+  (sllgen:make-string-parser the-lexical-spec the-grammar))
+
+(define just-scan
+  (sllgen:make-string-scanner the-lexical-spec the-grammar))
+
+;;;;;;;;;;;;;;;; the interpreter ;;;;;;;;;;;;;;;;
+
+(define eval-program 
+  (lambda (pgm)
+    (cases program pgm
+      (a-program (body) (unparse body)))))
+
+(define eval_unparse
+  (lambda (rands)
+    (map (lambda (x) (unparse x)) rands)))
+
+(define apply-primitive
+  (lambda (prim args)
+    (cases primitive prim
+      (add-prim () (list '+ (car args) (cadr args)))
+      (subtract-prim () (list '- (car args) (cadr args)))
+      (mult-prim  ()    (list '* (car args) (cadr args)))
+      (incr-prim  () (list '+ (car args) 1))
+      (decr-prim  () (list '- (car args) 1))
+;&      
+      (zero-test-prim () (list 'zero? (car args)))
+      )))
+
+;converting the given command into scheme format using the function apply-primitives
+(define unparse 
+  (lambda (exp)
+    (cases expression exp
+      (lit-exp (datum) datum)
+      (var-exp (id) id)
+      (primapp-exp (prim rands)
+        (let ((args (eval_unparse rands)))
+          (apply-primitive prim args)))
+      (if-exp
+       (test-exp true-exp false-exp) ;\new4
+              (list '(unparse (list test-of-exp true-of-exp false-of-exp)))
+       )
+      (let-exp (ids rands body) (list 'let (append ids (eval_unparse rands)) (unparse body)))
+      (proc-exp (ids body) (list 'ids (unparse body))) ;\new1
+      (app-exp (rator rands) ;\new7
+               (list (unparse rator) (eval_unparse rands)))
+;&      
+      (else (eopl:error 'eval-expression "Not here:~s" exp))
+      )))
+
+;;;; Right now a prefix must appear earlier in the file.
+(define init-env 
+  (lambda ()
+    (extend-env
+      '(i v x)
+      '(1 5 10)
+      (empty-env))))
+
+;;;;;;;;;;;;;;;; booleans ;;;;;;;;;;;;;;;;
+
+(define true-value?
+  (lambda (x)
+    (not (zero? x))))
+
+;;;;;;;;;;;;;;;; procedures ;;;;;;;;;;;;;;;;
+
+(define-datatype procval procval?
+  (closure 
+    (ids (list-of symbol?)) 
+    (body expression?)
+    (env environment?)))
+
+#|(define apply-procval
+  (lambda (proc args)
+    (cases procval proc
+      (closure (ids body env)
+        (unparse body (extend-env ids args env))))))|#
+               
+;;;;;;;;;;;;;;;; environments ;;;;;;;;;;;;;;;;
+
+(define-datatype environment environment?
+  (empty-env-record)
+  (extended-env-record
+    (syms (list-of symbol?))
+    (vec vector?)              ; can use this for anything.
+    (env environment?))
+  )
+
+(define empty-env
+  (lambda ()
+    (empty-env-record)))
+
+(define extend-env
+  (lambda (syms vals env)
+    (extended-env-record syms (list->vector vals) env)))
+
+(define apply-env
+  (lambda (env sym)
+    (cases environment env
+      (empty-env-record ()
+        (eopl:error 'apply-env "No binding for ~s" sym))
+      (extended-env-record (syms vals env)
+        (let ((position (rib-find-position sym syms)))
+          (if (number? position)
+              (vector-ref vals position)
+              (apply-env env sym)))))))
+
+(define rib-find-position 
+  (lambda (sym los)
+    (list-find-position sym los)))
+
+(define list-find-position
+  (lambda (sym los)
+    (list-index (lambda (sym1) (eqv? sym1 sym)) los)))
+
+(define list-index
+  (lambda (pred ls)
+    (cond
+      ((null? ls) #f)
+      ((pred (car ls)) 0)
+      (else (let ((list-index-r (list-index pred (cdr ls))))
+              (if (number? list-index-r)
+                (+ list-index-r 1)
+                #f))))))
+
+(define iota
+  (lambda (end)
+    (let loop ((next 0))
+      (if (>= next end) '()
+        (cons next (loop (+ 1 next)))))))
+
+(define difference
+  (lambda (set1 set2)
+    (cond
+      ((null? set1) '())
+      ((memv (car set1) set2)
+       (difference (cdr set1) set2))
+      (else (cons (car set1) (difference (cdr set1) set2))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;test cases;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(run "10")
+; should give 10
+
+(run "v")
+;should give 5
+
+(run "add1(+(5,i))")
+;should give (+ (+ 5 i) 1)
+
+(run "sub1(+(5,i))")
+;should give (- (+ 5 i) 1)
+
+(run "let f=proc(x) +(v,x) in (f 10)")
+;should give (let (f (ids (+ v x))) (f (10)))
+
+(run "let f=proc(x) *(v,x) in let g=proc(x) add1(x) in (f(g 100))")
+;should give (let (f (ids (* v x))) (let (g (ids (+ x 1))) (f ((g (100))))))
